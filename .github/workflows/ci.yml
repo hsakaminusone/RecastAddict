@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (ruff check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check patcher
+
+  format:
+    name: format (ruff format --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff format --check patcher
+
+  typecheck:
+    name: typecheck (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: mypy patcher
+
+  vet:
+    name: vet (compileall + bandit + whitespace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: whitespace check
+        run: git diff --check
+      - name: compileall (syntax / vet)
+        run: python -m compileall -q patcher
+      - name: bandit (security vet)
+        run: bandit -r patcher -q -x tests
+
+  tests:
+    name: tests (fixture-based, no APK needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: fixture tests (graph roots + file surgery)
+        run: |
+          python3 patcher/tests/test_graph_roots.py
+          python3 patcher/tests/test_surgery.py
+      - name: tree tests (skip without a decoded app_src)
+        run: |
+          python3 patcher/tests/test_smali.py
+          python3 patcher/tests/test_anchor_resolution.py

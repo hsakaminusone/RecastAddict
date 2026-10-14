@@ -1,0 +1,18 @@
+# signing keys and build artifacts are local-only, never committed
+*.jks
+*.apk
+*.idsig
+patcher/out/
+# patcher runtime state regenerates from the pinned APK
+app_src/
+patcher/.journal/
+patcher/anchors/shims.txt
+patcher/anchors/deleted_sdk_classes.json
+patcher/.mypy_cache/
+patcher/.ruff_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+# local design notes, not part of the repo
+patcher/PLAN.md
