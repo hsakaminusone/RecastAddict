@@ -3,7 +3,9 @@ version profile. R8 renames every release, so resolution matches on literals
 and method shapes that survive obfuscation; a release with no profile falls
 back to all known names and fails loud on a real rename.
 
-Adding a release is one dict entry: `"2026.13": {"applovin_init": ["o3"]}`.
+Adding a release is one dict entry: `"2026.14": {"applovin_init": ("p3",)}`.
+Class anchors use CLASS_PROFILES the same way: the patch names a role
+("ad_gates"), the profile maps it to this release's obfuscated method name.
 """
 
 from __future__ import annotations
@@ -48,6 +50,9 @@ class MethodEvidence:
     # names the spec has been observed to use, oldest first. The registry adds
     # any profile aliases on top of these.
     names: tuple[str, ...] = ()
+    # "app" resolves in APP_CLASS_REL only; "tree" falls back to a full scan
+    # (R8 can move the body into a synthetic lambda).
+    scope: str = "app"
     note: str = ""
 
     def with_names(self, names: tuple[str, ...]) -> MethodEvidence:
@@ -69,7 +74,8 @@ class ClassEvidence:
 
 
 METHOD_SPECS: dict[str, MethodEvidence] = {
-    # The 7 behavioural ad stubs in PodcastAddictApplication.
+    # The 7 behavioural ad stubs in PodcastAddictApplication (plus the SDK
+    # initialiser, which R8 may extract into a synthetic lambda).
     "applovin_init": MethodEvidence(
         label="AppLovin SDK initializer",
         strings=(
@@ -81,7 +87,8 @@ METHOD_SPECS: dict[str, MethodEvidence] = {
             "setMediationProvider(Ljava/lang/String;)",
         ),
         names=("n0", "m0"),
-        note="SDK key + builder + setMediationProvider('max')",
+        scope="tree",
+        note="SDK key + builder + setMediationProvider('max'); lambda-extracted on 2026.12.1+",
     ),
     "ad_unit_selector": MethodEvidence(
         label="ad-unit-ID + format selector",
@@ -96,11 +103,10 @@ METHOD_SPECS: dict[str, MethodEvidence] = {
     ),
     "banner_post": MethodEvidence(
         label="ad-load Runnable post",
-        # Reads the M0 banner field, null-guards it, constructs a Runnable and
-        # hands it to the app's poster. Both the Runnable class and the poster
-        # are obfuscated, so neither is named here -- only the shape.
-        strings=("M0:Lcom/applovin/mediation/ads/MaxAdView;", "Ljava/lang/Runnable;"),
-        invokes=("i(Ljava/lang/Runnable;)", "new-instance"),
+        # Field name (M0->P0), Runnable class and poster method (i->k) all
+        # drift; only the shape is stable. Matched by the field's type suffix.
+        strings=(":Lcom/applovin/mediation/ads/MaxAdView;", "Ljava/lang/Runnable;"),
+        invokes=("new-instance",),
         names=("s", "r"),
         note="posts the runnable that loads the ad view",
     ),
@@ -123,10 +129,11 @@ METHOD_SPECS: dict[str, MethodEvidence] = {
     ),
     "ad_teardown": MethodEvidence(
         label="ad-view teardown",
+        # Field name moved M0 -> P0 on 2026.12.1; matched by type suffix.
         strings=(
             "stopAutoRefresh",
             "destroy",
-            "M0:Lcom/applovin/mediation/ads/MaxAdView;",
+            ":Lcom/applovin/mediation/ads/MaxAdView;",
         ),
         invokes=(
             "stopAutoRefresh()",
@@ -137,10 +144,10 @@ METHOD_SPECS: dict[str, MethodEvidence] = {
     ),
     "screen_status": MethodEvidence(
         label="ad screen-status tracking",
-        strings=("setScreenStatus(", "M0:Lcom/applovin/mediation/ads/MaxAdView;"),
+        strings=("setScreenStatus(", ":Lcom/applovin/mediation/ads/MaxAdView;"),
         forbid_strings=("stopAutoRefresh", "getAdaptiveSize", "isTablet"),
         names=("V0", "U0"),
-        note="tracks ad screen visibility via the M0 ad field",
+        note="tracks ad screen visibility via the MaxAdView field",
     ),
 }
 
@@ -150,28 +157,23 @@ CLASS_SPECS: dict[str, ClassEvidence] = {
         label="premium / IAP gate",
         # Subscription state read from these SharedPreferences names.
         strings=("pref_previousTimerUpdate", "pref_nextTimerUpdate"),
+        # 11/12 also have g(Context)/m(Z); 13 renamed g->h and l. These four
+        # shapes are identical on all four pins.
         methods=(
             ("f", "()Z"),
-            ("g", "(Landroid/content/Context;)Z"),
-            ("k", "(Landroid/content/Context;)Z"),
             ("d", "(Landroid/content/Context;)Z"),
-            ("m", "(Z)V"),
+            ("e", "(Landroid/content/Context;Z)Z"),
+            ("k", "(Landroid/content/Context;)Z"),
         ),
         forbid_strings=("recast-shim",),
         note="subscription active / donate-app present / ad gates / upsell",
     ),
     "installer_gate": ClassEvidence(
         label="installer / signature gate",
-        # NB: the literal "IAPHelper.canUse() called before isLegit flag
-        # initialized" is NOT used as evidence here: it lived inside a method
-        # premium stubs, so it was already gone by the time other modules
-        # resolved this class mid-pipeline.
-        strings=(
-            "AppSecurityHelper",
-            "cm.aptoide.pt",
-            "com.android.vending",
-            "com.apkpure.aegon",
-        ),
+        # The package-name literals (cm.aptoide.pt, com.apkpure.aegon, ...) were
+        # replaced by hashed int[] sets on 2026.12.1+; "AppSecurityHelper" sits
+        # in <clinit> and "isAppSignatureLegit" in d()Z, which no patch stubs.
+        strings=("AppSecurityHelper", "isAppSignatureLegit"),
         methods=(
             ("c", "()Z"),
             ("d", "()Z"),
@@ -190,8 +192,8 @@ CLASS_SPECS: dict[str, ClassEvidence] = {
 # One entry per observed target-version, containing ONLY what changed: the
 # method names. Adding a future release is a data addition here. Nothing else.
 #
-# To support 2026.13 you add:
-#     "2026.13": {"applovin_init": ["o3"], "banner_post": ["t"], ...}
+# To support a new release you add:
+#     "2026.14": {"applovin_init": ("p3",), "banner_post": ("u",), ...}
 #
 # If a release is absent, resolution falls back to the union of every name any
 # profile declares (plus BASE), so an unchanged build still resolves, and a
@@ -208,7 +210,79 @@ PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
         "ad_teardown": ("B0",),
         "screen_status": ("V0",),
     },
+    "2026.12.1": {
+        "applovin_init": ("accept",),
+        "ad_unit_selector": ("D",),
+        "banner_post": ("s",),
+        "banner_helper_1": ("w",),
+        "banner_helper_2": ("x",),
+        "ad_teardown": ("C0",),
+        "screen_status": ("W0",),
+    },
+    "2026.13": {
+        "applovin_init": ("accept",),
+        "ad_unit_selector": ("E",),
+        "banner_post": ("s",),
+        "banner_helper_1": ("w",),
+        "banner_helper_2": ("x",),
+        "ad_teardown": ("E0",),
+        "screen_status": ("Y0",),
+    },
+    "2026.14": {
+        "applovin_init": ("accept",),
+        "ad_unit_selector": ("E",),
+        "banner_post": ("s",),
+        "banner_helper_1": ("w",),
+        "banner_helper_2": ("x",),
+        "ad_teardown": ("F0",),
+        "screen_status": ("Z0",),
+    },
 }
+
+
+# -------------------------------------------------- class-anchor role names
+#
+# The patches address methods inside CLASS_SPECS classes by ROLE, not name:
+# the name is release data, the role is the patch's contract. 2026.13 moved
+# premium ad_gates g->h and upsell k->l (k became donate-install confirm),
+# and 13/14 split a pure-state g()Z out of f() (premium_state).
+
+BASE_CLASS_ROLES: dict[str, str] = {
+    "premium_gate:subscription": "f",
+    "premium_gate:donate_app": "d",
+    "premium_gate:ad_gates": "g",
+    "premium_gate:upsell": "k",
+    "installer_gate:iap_can_use": "f",
+    "installer_gate:cert_allowlist": "g",
+    "installer_gate:installer_allowlist": "c",
+    "installer_gate:donate_installer": "e",
+}
+
+# premium_state exists only where the class split it out of f(); a role that
+# is in neither BASE nor a profile is absent in that build.
+CLASS_PROFILES: dict[str, dict[str, str]] = {
+    "2026.13": {
+        "premium_gate:ad_gates": "h",
+        "premium_gate:upsell": "l",
+        "premium_gate:premium_state": "g",
+    },
+    "2026.14": {
+        "premium_gate:ad_gates": "h",
+        "premium_gate:upsell": "l",
+        "premium_gate:premium_state": "g",
+    },
+}
+
+
+def class_role_name(app_src: Path, key: str, role: str) -> str | None:
+    """Method name for `key:role` on this release; None when absent here."""
+    version = detect_version(app_src)
+    overlay = CLASS_PROFILES.get(version, {}) if version else {}
+    if version:
+        return overlay.get(f"{key}:{role}", BASE_CLASS_ROLES.get(f"{key}:{role}"))
+    # unknown version: prefer the base name so an unmapped rename still fails
+    # at method lookup with the full class inventory, not at name resolution
+    return BASE_CLASS_ROLES.get(f"{key}:{role}")
 
 
 def _all_known_names() -> dict[str, tuple[str, ...]]:
@@ -314,20 +388,26 @@ def _is_stubbed(span: SmaliMethodSpan, data: bytes) -> bool:
     )
 
 
-def match_method(spec: MethodEvidence, span: SmaliMethodSpan, data: bytes) -> bool:
+def match_method(
+    spec: MethodEvidence, span: SmaliMethodSpan, data: bytes, *, allow_stub: bool = True
+) -> bool:
     """True when `span` satisfies the version-independent evidence.
 
     `invokes` entries are either a bare instruction (`new-instance`) or a call
     target (`builder(Ljava/lang/String;)`). The form is detected, not assumed:
     a bare opcode has no argument list, so prefixing "->" to it creates a
     token that never appears and the spec silently never matches.
+
+    allow_stub=False (tree scans) skips our stub short-circuit: the whole tree
+    is full of coincidental stub-shaped methods (11 named accept/n0/m0 on
+    2026.12.1), so only real evidence is unambiguous there.
     """
     if span.name not in spec.names:
         return False
     body = _body(span, data)
     # Idempotency: a spec whose evidence lived inside a body that OUR OWN patch
     # stubbed cannot re-resolve on an already-patched tree. Accept our stub.
-    if _is_stubbed(span, data):
+    if allow_stub and _is_stubbed(span, data):
         return True
     if any(x.encode() not in body for x in spec.strings):
         return False
@@ -399,11 +479,60 @@ def resolve_class(app_src: Path, key: str = "installer_gate") -> Resolution:
     )
 
 
-def resolve_method(app_src: Path, key: str, app_rel: str) -> tuple[SmaliMethodSpan, bytes] | None:
-    """Resolve a method spec to exactly one span. Returns (span, file_data).
+_LAMBDA_CAPTURE = (
+    b".field public final synthetic a:B",
+    b".field public final synthetic b:Ljava/lang/Object;",
+    b".method public synthetic constructor <init>(Ljava/lang/Object;B)V",
+)
 
-    None only when the spec is genuinely absent in this build, which is a
-    legitimate outcome (a feature was removed). Anything else raises.
+
+def _is_capture_lambda(data: bytes) -> bool:
+    """A concrete synthetic lambda that captures an object + a byte dispatch.
+
+    R8 emits this shape for the SDK initialiser on 2026.12.1+ (b4/i4).
+    Stub-shaped coincidental matches are all `interface abstract` or
+    `abstract` classes, never this shape -- and unlike an app-class reference,
+    these markers sit outside the stubbed method body, so they survive apply.
+    """
+    return all(m in data for m in _LAMBDA_CAPTURE)
+
+
+def _match_tree(spec: MethodEvidence, span: SmaliMethodSpan, data: bytes) -> bool:
+    """Tree-scope matcher: strict evidence, or OUR stub of the same method.
+
+    Strict evidence is required in tree scans (11 coincidental stub-shaped
+    accept/n0/m0 methods exist per build). For idempotent re-resolution after
+    apply, a stub-shaped match is accepted only when its file is the capture
+    lambda that held the SDK initialiser.
+    """
+    if match_method(spec, span, data, allow_stub=False):
+        return True
+    return span.name in spec.names and _is_stubbed(span, data) and _is_capture_lambda(data)
+
+
+def _scan_tree(app_src: Path, spec: MethodEvidence) -> list[tuple[SmaliMethodSpan, Path, bytes]]:
+    """(span, file, data) for every match anywhere in the tree (scope="tree")."""
+    out: list[tuple[SmaliMethodSpan, Path, bytes]] = []
+    for root in _dex_roots(app_src):
+        for f in sorted(root.rglob("*.smali")):
+            try:
+                data = f.read_bytes()
+            except OSError:
+                continue
+            out.extend(
+                (s, f, data) for s in _find_method_spans(data, f) if _match_tree(spec, s, data)
+            )
+    return out
+
+
+def resolve_method_file(
+    app_src: Path, key: str, app_rel: str
+) -> tuple[SmaliMethodSpan, Path, bytes] | None:
+    """Like resolve_method, but also reports the declaring file.
+
+    A scope="tree" spec can live outside app_rel (the SDK initialiser moved
+    into a synthetic lambda on 2026.12.1+), and the caller must edit the file
+    that actually holds the method.
     """
     app_src = Path(app_src)
     specs, _version = specs_for(app_src)
@@ -413,6 +542,14 @@ def resolve_method(app_src: Path, key: str, app_rel: str) -> tuple[SmaliMethodSp
         raise _anchor_error(f"{key}: {app_rel} not found")
     data = path.read_bytes()
     hits = [s for s in _find_method_spans(data, path) if match_method(spec, s, data)]
+    if not hits and spec.scope == "tree":
+        tree_hits = _scan_tree(app_src, spec)
+        if len(tree_hits) > 1:
+            raise _anchor_error(
+                f"{key}: {spec.label!r} is ambiguous -- {len(tree_hits)} methods match "
+                f"across the tree: {[s.name for s, _p, _d in tree_hits]}"
+            )
+        return tree_hits[0] if tree_hits else None
     if not hits:
         return None
     if len(hits) > 1:
@@ -420,7 +557,20 @@ def resolve_method(app_src: Path, key: str, app_rel: str) -> tuple[SmaliMethodSp
             f"{key}: {spec.label!r} is ambiguous -- {len(hits)} methods match "
             f"names={list(spec.names)}: {[s.name for s in hits]}"
         )
-    return hits[0], data
+    return hits[0], path, data
+
+
+def resolve_method(app_src: Path, key: str, app_rel: str) -> tuple[SmaliMethodSpan, bytes] | None:
+    """Resolve a method spec to exactly one span. Returns (span, file_data).
+
+    None only when the spec is genuinely absent in this build, which is a
+    legitimate outcome (a feature was removed). Anything else raises.
+    """
+    hit = resolve_method_file(app_src, key, app_rel)
+    if hit is None:
+        return None
+    span, _path, data = hit
+    return span, data
 
 
 # ------------------------------------------------------- APP_CLASS_REL + compat
@@ -432,6 +582,24 @@ APP_CLASS_REL = "smali/com/bambuna/podcastaddict/PodcastAddictApplication.smali"
 _NO_PATH = Path("")  # sentinel: no real file backs an in-memory parse
 
 
+def resolve_method_all_files(
+    app_src: Path, key: str, app_rel: str
+) -> list[tuple[SmaliMethodSpan, Path]]:
+    """(span, file) for every match, WITHOUT the ambiguity error. See
+    resolve_method_all for why tolerant enumeration exists."""
+    app_src = Path(app_src)
+    specs, _version = specs_for(app_src)
+    spec = specs[key]
+    path = app_src / app_rel
+    if not path.is_file():
+        return []
+    data = path.read_bytes()
+    out = [(s, path) for s in _find_method_spans(data, path) if match_method(spec, s, data)]
+    if not out and spec.scope == "tree":
+        return [(s, p) for s, p, _d in _scan_tree(app_src, spec)]
+    return out
+
+
 def resolve_method_all(app_src: Path, key: str, app_rel: str) -> list[SmaliMethodSpan]:
     """Every span matching a spec, WITHOUT the ambiguity error.
 
@@ -440,14 +608,7 @@ def resolve_method_all(app_src: Path, key: str, app_rel: str) -> list[SmaliMetho
     that is a *patched* state, not an error. verify() wants to enumerate all
     candidates and confirm each one is stubbed; apply() wants exactly one.
     """
-    app_src = Path(app_src)
-    specs, _version = specs_for(app_src)
-    spec = specs[key]
-    path = app_src / app_rel
-    if not path.is_file():
-        return []
-    data = path.read_bytes()
-    return [s for s in _find_method_spans(data, path) if match_method(spec, s, data)]
+    return [s for s, _p in resolve_method_all_files(app_src, key, app_rel)]
 
 
 # The telemetry HTTP chokepoint: the method every first-party backend call

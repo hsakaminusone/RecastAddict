@@ -79,6 +79,16 @@ class Manifest:
                     return True
         return False
 
+    def remove_elements(self, tag: str, names: tuple[str, ...]) -> int:
+        """Remove every `tag` element (e.g. uses-permission) named in `names`."""
+        cut = 0
+        for parent in self.root.iter():
+            for child in list(parent):
+                if child.tag == tag and child.get(f"{ANDROID}name") in names:
+                    parent.remove(child)
+                    cut += 1
+        return cut
+
     def save(self) -> None:
         self.tree.write(self.path, encoding="utf-8", xml_declaration=True)
 

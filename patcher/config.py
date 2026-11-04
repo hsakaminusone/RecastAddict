@@ -11,7 +11,7 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- pinned target
 #
-# Both pins carry the same original signer certificate, so both are untampered
+# Every pin carries the same original signer certificate, so all are untampered
 # release builds; the name drift between them is R8 re-obfuscation.
 
 # A pin is accepted only when SHA-256, package, versionName, versionCode and
@@ -34,6 +34,27 @@ PINS: tuple[dict, ...] = (
         "legacy": False,
         "smali_files": 19473,
     },
+    {
+        "version_name": "2026.12.1",
+        "version_code": "21808",
+        "sha256": "40cd3b808d416f4b474adf0cc017bba14b5c88f6fd9cc735e41b957eaeaffeba",
+        "legacy": False,
+        "smali_files": 20336,
+    },
+    {
+        "version_name": "2026.13",
+        "version_code": "21822",
+        "sha256": "84f80fbce701f9dc410146318e03dba0bcaf9375252ce7ca32f6a52b0976c6a5",
+        "legacy": False,
+        "smali_files": 26335,
+    },
+    {
+        "version_name": "2026.14",
+        "version_code": "21833",
+        "sha256": "2fb67f94cc568bbbab2c8f20926c8752f65d0a421668cfec8baff3e327cb537e",
+        "legacy": False,
+        "smali_files": 26421,
+    },
 )
 
 
@@ -42,7 +63,7 @@ PINS: tuple[dict, ...] = (
 # is not one of the supported builds fails loudly at selection time, and again
 # at the policy gate.
 def supported_versions() -> list[str]:
-    """Version names this patcher supports. Currently exactly two."""
+    """Version names this patcher supports."""
     return [p["version_name"] for p in PINS]
 
 
@@ -199,6 +220,10 @@ DELETED_SDK_TREES = (
     "com/amazon/aps",
     "com/amazon/device/ads",
     "com/applovin",  # minus com/applovin/shadow -- see KEEP_TREES
+    # ad-only deps, present on all four pins, zero first-party refs:
+    "com/iab/omid",  # Open Measurement SDK (ad viewability)
+    "com/digitalturbine",  # Fyber Ignite ad distribution
+    "com/google/ads",  # AdMob mediation adapters
 )
 KEEP_TREES = (
     "com/applovin/shadow",
@@ -231,15 +256,22 @@ SHIM_NAMESPACES = (
     "com/google/android/ump",
     "com/amazon/aps",
     "com/amazon/device/ads",
+    "com/iab/omid",
+    "com/digitalturbine",
+    "com/google/ads",
     "com/google/firebase/analytics",
     "com/google/firebase/crashlytics",
 )
 
-# Suppressed telemetry / ad-serving endpoints.
+# Suppressed telemetry / ad-serving endpoints. Blocked = uploads usage stats
+# or ad state; KEPT_ENDPOINTS below are functional or user-initiated.
 BLOCKED_ENDPOINTS = (
     "ping_user.php",
     "update_podcast_stats.php",
     "update_playback_statistics.php",
+    "update_episode_stats.php",
+    "update_global_stats.php",
+    "update_radio_stats.php",
     "update_categories_stats.php",
     "update_iha_stats.php",
     "update_curatedList_stats.php",

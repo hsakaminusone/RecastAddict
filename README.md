@@ -27,6 +27,9 @@ assets.
 
 | Version | Code | Source |
 |---|---|---|
+| 2026.14 | 21833 | APKMirror universal APK (all ABIs in one file) |
+| 2026.13 | 21822 | APKMirror universal APK (all ABIs in one file) |
+| 2026.12.1 | 21808 | APKMirror universal APK (all ABIs in one file) |
 | 2026.12 | 21777 | APKMirror universal APK (all ABIs in one file) |
 | 2026.11 | 21774 | APKMirror universal APK (all ABIs in one file) |
 

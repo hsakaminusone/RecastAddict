@@ -41,18 +41,23 @@ class SecurityBehaviorPatch(Patch):
     ordered_after = ("premium",)
 
     def resolve(self, ctx: Context) -> list[Anchor]:
-        # zh.f()/zh.g() are stubbed by premium; found by evidence, not name.
+        # installer f()/g() are stubbed by premium; found by evidence, not name.
         try:
             r = A.resolve_class(ctx.app_src, "installer_gate")
         except AnchorError as exc:
             raise AnchorError(f"security_behavior: {exc}") from exc
         return [
-            Anchor(id="zh.f", file=r.rel, descriptor="()Z", method="f"),
             Anchor(
-                id="zh.g",
+                id="installer.f",
+                file=r.rel,
+                descriptor="()Z",
+                method=A.class_role_name(ctx.app_src, "installer_gate", "iap_can_use"),
+            ),
+            Anchor(
+                id="installer.g",
                 file=r.rel,
                 descriptor="(Landroid/content/Context;Landroid/content/pm/PackageInfo;Z)Z",
-                method="g",
+                method=A.class_role_name(ctx.app_src, "installer_gate", "cert_allowlist"),
             ),
         ]
 
@@ -74,11 +79,16 @@ class SecurityBehaviorPatch(Patch):
             out.append("FAIL installer-gate class not resolvable by evidence")
             r = None
         if r is not None:
+            f_name = A.class_role_name(ctx.app_src, "installer_gate", "iap_can_use")
+            g_name = A.class_role_name(ctx.app_src, "installer_gate", "cert_allowlist")
+            if f_name is None or g_name is None:
+                out.append("FAIL installer-gate roles unmapped in this build")
+                f_name, g_name = "", ""
             targets = (
-                (r.rel, "f", "()Z"),
+                (r.rel, f_name, "()Z"),
                 (
                     r.rel,
-                    "g",
+                    g_name,
                     "(Landroid/content/Context;Landroid/content/pm/PackageInfo;Z)Z",
                 ),
             )
@@ -110,30 +120,6 @@ class SecurityBehaviorPatch(Patch):
         return out
 
 
-AD_STUB_TARGETS = [
-    (
-        "PodcastAddictApplication.smali",
-        "m0",
-        "()V",
-        "AppLovin SDK initializer (measured: SDK key + builder + setMediationProvider)",
-    ),
-    ("PodcastAddictApplication.smali", "C", "()Lqr0;", "ad-unit-ID + format selector"),
-    ("PodcastAddictApplication.smali", "r", "()V", "posts the ad-load Runnable Lvl3"),
-    (
-        "PodcastAddictApplication.smali",
-        "v",
-        "(Lo9;Landroid/app/Activity;)Lcom/applovin/mediation/ads/MaxAdView;",
-        "banner helper #1",
-    ),
-    (
-        "PodcastAddictApplication.smali",
-        "w",
-        ("(Lo9;Landroid/app/Activity;ILjava/lang/String;)Lcom/applovin/mediation/ads/MaxAdView;"),
-        "banner helper #2",
-    ),
-    ("PodcastAddictApplication.smali", "A0", "()V", "ad-view teardown (stopAutoRefresh/destroy)"),
-    ("PodcastAddictApplication.smali", "U0", "(Z)V", "ad screen-status tracking"),
-]
 AD_MANIFEST_PREFIXES = [
     "com.applovin.",
     "com.fyber.",
@@ -158,6 +144,16 @@ AD_INIT_PROVIDERS = [
     "com.google.android.gms.ads.MobileAdsInitProvider",
     "com.applovin.sdk.AppLovinInitProvider",
 ]
+# ad-only manifest entries that are not components (measured on all pins)
+AD_USES_PERMISSIONS = (
+    "com.google.android.gms.permission.AD_ID",
+    "android.permission.ACCESS_ADSERVICES_AD_ID",
+    "com.amazon.privacypass.ATTEST",
+)
+AD_USES_LIBRARIES = (
+    "android.ext.adservices",
+    "com.amazon.privacypass",
+)
 APP_REL = "smali/com/bambuna/podcastaddict/PodcastAddictApplication.smali"
 
 
@@ -232,12 +228,12 @@ class AdsPatch(Patch):
         out = []
         for key in A.METHOD_SPECS:
             if tolerant:
-                spans = A.resolve_method_all(ctx.app_src, key, A.APP_CLASS_REL)
+                hits = A.resolve_method_all_files(ctx.app_src, key, A.APP_CLASS_REL)
             else:
-                hit = A.resolve_method(ctx.app_src, key, A.APP_CLASS_REL)
-                spans = [hit[0]] if hit else []
-            for span in spans:
-                entry = (span.name, ctx.app_src / A.APP_CLASS_REL, span)
+                hit = A.resolve_method_file(ctx.app_src, key, A.APP_CLASS_REL)
+                hits = [(hit[0], hit[1])] if hit else []
+            for span, path in hits:
+                entry = (span.name, path, span)
                 # Dedupe: after stubbing, a helper whose name is accepted by two
                 # specs (banner_helper_1 takes (w,v), banner_helper_2 takes
                 # (x,w,v)) would otherwise be reported -- and re-checked -- twice.
@@ -263,18 +259,19 @@ class AdsPatch(Patch):
             from patcher.smali.editor import is_stub
 
             targets = self._resolve_ad_targets(ctx, tolerant=True)
-            data = path.read_bytes()
-            for _n, _p, span in targets:
+            for _n, p, span in targets:
                 ret = span.descriptor[span.descriptor.index(")") + 1 :]
-                if not is_stub(data, span, ret):
+                if not is_stub(p.read_bytes(), span, ret):
                     raise exc
             for _n, _p, span in targets:
                 res.already += 1
                 res.note(f"already stubbed: {span.name}{span.descriptor}")
             return res
-        for _name, _p, span in targets:
+        for _name, target_path, span in targets:
             reason = f"ad helper {span.name}{span.descriptor}"
-            e = stub_method(SmaliFile(path), span.name, span.descriptor, reason=reason)
+            # each target is stubbed in the file that actually holds it: the
+            # SDK initialiser lives outside the app class on 2026.12.1+
+            e = stub_method(SmaliFile(target_path), span.name, span.descriptor, reason=reason)
             if e is None:
                 res.already += 1
                 continue
@@ -283,7 +280,7 @@ class AdsPatch(Patch):
                 continue
             apply_edits([e], ctx.journal_dir, "ads", ctx.app_src)
             res.applied += 1
-            res.note(f"stubbed {span.name}{span.descriptor}")
+            res.note(f"stubbed {span.name}{span.descriptor} in {target_path.name}")
         return res
 
     def _strip_manifest(self, ctx: Context) -> PatchResult:
@@ -302,6 +299,8 @@ class AdsPatch(Patch):
             for c in m.providers():
                 if c.name == prov and m.remove(c):
                     res.applied += 1
+        res.applied += m.remove_elements("uses-permission", AD_USES_PERMISSIONS)
+        res.applied += m.remove_elements("uses-library", AD_USES_LIBRARIES)
         if not ctx.offline and res.applied:
             m.save()
         res.note(f"{res.applied} manifest entries removed")
@@ -367,11 +366,12 @@ class AdsPatch(Patch):
         p = ctx.app_src / APP_REL
         if not p.is_file():
             raise AnchorError(f"ads: {APP_REL} not found")
-        for _name, _path, span in self._resolve_ad_targets(ctx):
+        for _name, path, span in self._resolve_ad_targets(ctx):
+            rel = str(path.relative_to(ctx.app_src))
             anchors.append(
                 Anchor(
-                    id=f"{APP_REL}:{span.name}",
-                    file=APP_REL,
+                    id=f"{rel}:{span.name}",
+                    file=rel,
                     descriptor=span.descriptor,
                     method=span.name,
                     evidence={"found_in_this_build": True},
@@ -415,14 +415,17 @@ class AdsPatch(Patch):
         sm = ctx.anchors_dir / ShimPatch.SHIM_MANIFEST
         if sm.is_file():
             shim_files = {line for line in sm.read_text().splitlines() if line}
-        # 1. helpers stubbed
-        sf = SmaliFile(ctx.app_src / APP_REL)
+        # 1. helpers stubbed (each in its own file: the SDK initialiser lives
+        # outside the app class on 2026.12.1+)
         from patcher.smali.editor import is_stub
 
         resolved = self._resolve_ad_targets(ctx, tolerant=True)
-        for _name, _path, span in resolved:
+        sf_cache: dict[Path, SmaliFile] = {}
+        for _name, path, span in resolved:
             ret = span.descriptor[span.descriptor.index(")") + 1 :]
-            if is_stub(sf.data, span, ret):
+            if path not in sf_cache:
+                sf_cache[path] = SmaliFile(path)
+            if is_stub(sf_cache[path].data, span, ret):
                 out.append(f"OK   {span.name}{span.descriptor} stubbed")
             else:
                 out.append(f"FAIL {span.name}{span.descriptor} not stubbed")

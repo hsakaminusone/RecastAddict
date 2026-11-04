@@ -147,7 +147,10 @@ class TelemetryPatch(Patch):
                 f"FAIL {remaining} telemetry endpoint literals still resolve to addictpodcast.com"
             )
         else:
-            out.append("OK  all 13 telemetry endpoints redirected to an unroutable address")
+            out.append(
+                f"OK  all {len(config.BLOCKED_ENDPOINTS)} telemetry endpoints "
+                "redirected to an unroutable address"
+            )
         roots = [p for p in sorted(ctx.app_src.glob("smali*")) if p.is_dir()]
         for sub in FIREBASE_KEEP:
             n = sum(1 for r in roots if (r / sub).is_dir() for _ in (r / sub).rglob("*.smali"))
